@@ -7,6 +7,7 @@
     }
   },
   "rewrites": [
+    { "source": "/", "destination": "/api/index.js" },
     { "source": "/health", "destination": "/api/index.js" },
     { "source": "/meta", "destination": "/api/index.js" },
     { "source": "/schools/search", "destination": "/api/index.js" },
