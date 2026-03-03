@@ -219,8 +219,15 @@ function selectSchool(schools, { schoolName, regionName, schoolCode }) {
 }
 
 async function createApp() {
-  const adapter = await getAdapter();
   const app = express();
+
+  app.get("/", (_req, res) => {
+    res.json({
+      status: "ok",
+      service: "comci-direct-server",
+      endpoints: ["/health", "/meta", "/schools/search", "/timetable/verify"],
+    });
+  });
 
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });
@@ -248,6 +255,7 @@ async function createApp() {
 
   app.get("/schools/search", async (req, res, next) => {
     try {
+      const adapter = await getAdapter();
       const query = String(req.query.q || "").trim();
       if (!query) {
         return res.status(400).json({ message: "q is required" });
@@ -263,6 +271,7 @@ async function createApp() {
 
   app.get("/timetable/verify", async (req, res, next) => {
     try {
+      const adapter = await getAdapter();
       const schoolName = String(req.query.school_name || "").trim();
       const regionName = String(req.query.region_name || "").trim();
       const schoolCode = String(req.query.school_code || "").trim();
