@@ -26,13 +26,12 @@ async function createComciganAdapter() {
 }
 
 function weekInfoForDate(dateText) {
-  const target = new Date(`${dateText}T00:00:00+09:00`);
-  if (Number.isNaN(target.getTime())) {
+  const target = parseDateParts(dateText);
+  if (!target) {
     throw new Error("target_date must use YYYY-MM-DD format");
   }
 
-  const now = new Date();
-  const seoulNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+  const seoulNow = seoulDatePartsNow();
 
   const currentMonday = startOfWeek(seoulNow);
   const targetMonday = startOfWeek(target);
@@ -81,6 +80,31 @@ function weekdayIndexMondayFirst(date) {
 
 function formatIsoDate(date) {
   return date.toISOString().slice(0, 10);
+}
+
+function parseDateParts(dateText) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateText);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+}
+
+function seoulDatePartsNow() {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+
+  const parts = formatter.formatToParts(new Date());
+  const year = Number(parts.find((part) => part.type === "year")?.value);
+  const month = Number(parts.find((part) => part.type === "month")?.value);
+  const day = Number(parts.find((part) => part.type === "day")?.value);
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
 }
 
 function normalizeSchool(candidate) {
