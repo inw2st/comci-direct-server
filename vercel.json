@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "functions": {
+    "api/index.js": {
+      "runtime": "nodejs22.x",
+      "memory": 1024,
+      "maxDuration": 10
+    }
+  },
+  "rewrites": [
+    { "source": "/health", "destination": "/api/index.js" },
+    { "source": "/meta", "destination": "/api/index.js" },
+    { "source": "/schools/search", "destination": "/api/index.js" },
+    { "source": "/timetable/verify", "destination": "/api/index.js" }
+  ]
+}

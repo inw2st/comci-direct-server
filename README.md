@@ -43,6 +43,35 @@ npm install
 npm start
 ```
 
+## Vercel
+
+Deploy this directory as the project root.
+
+Files added for Vercel:
+
+- `api/index.js`: serverless entrypoint
+- `app.js`: shared Express app factory
+- `vercel.json`: rewrites `/health`, `/meta`, `/schools/search`, `/timetable/verify` to the serverless function
+
+After deploy, test:
+
+```bash
+curl https://YOUR-VERCEL-DOMAIN/health
+curl --get --data-urlencode "q=화홍고등학교" "https://YOUR-VERCEL-DOMAIN/schools/search"
+curl --get \
+  --data-urlencode "school_name=화홍고등학교" \
+  --data-urlencode "region_name=경기" \
+  --data-urlencode "grade=3" \
+  --data-urlencode "class_num=2" \
+  --data-urlencode "target_date=2026-03-05" \
+  "https://YOUR-VERCEL-DOMAIN/timetable/verify"
+```
+
+If the domain changes, update the app constants in:
+
+- `SchoolLife/NeisManager.swift`
+- `Widgets/TimetableWidget.swift`
+
 ## Railway
 
 Deploy this directory as the service root.
