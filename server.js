@@ -3,53 +3,26 @@ const express = require("express");
 const KOREAN_WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"];
 
 async function createComciganAdapter() {
-  const mod = require("comcigan-parser");
-  const candidates = [];
+  const Timetable = require("comcigan-parser");
+  const instance = new Timetable();
+  await instance.init();
 
-  if (typeof mod === "function") {
-    try {
-      candidates.push(new mod());
-    } catch {
-      candidates.push(mod);
-    }
-  }
+  return {
+    async searchSchool(keyword) {
+      return instance.search(keyword);
+    },
+    async getTimetable({ schoolCode, grade, classNum, maxGrade = 3 }) {
+      instance._option = Object.assign({}, instance._option, { maxGrade });
+      instance.setSchool(Number(schoolCode));
+      const allTimetables = await instance.getTimetable();
 
-  if (mod && typeof mod === "object") {
-    candidates.push(mod);
-    if (mod.default) {
-      try {
-        candidates.push(typeof mod.default === "function" ? new mod.default() : mod.default);
-      } catch {
-        candidates.push(mod.default);
+      if (!allTimetables?.[grade]?.[classNum]) {
+        throw new Error(`Timetable not found for grade ${grade} class ${classNum}`);
       }
-    }
-    if (mod.Comcigan) {
-      try {
-        candidates.push(new mod.Comcigan());
-      } catch {
-        candidates.push(mod.Comcigan);
-      }
-    }
-  }
 
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    const searchSchool = candidate.searchSchool || mod.searchSchool;
-    const getTimetable = candidate.getTimetable || mod.getTimetable;
-    const init = candidate.init || mod.init;
-
-    if (typeof searchSchool === "function" && typeof getTimetable === "function") {
-      if (typeof init === "function") {
-        await init.call(candidate);
-      }
-      return {
-        searchSchool: searchSchool.bind(candidate),
-        getTimetable: getTimetable.bind(candidate),
-      };
-    }
-  }
-
-  throw new Error("Unsupported comcigan-parser export shape");
+      return allTimetables[grade][classNum];
+    },
+  };
 }
 
 function weekInfoForDate(dateText) {
@@ -259,7 +232,6 @@ async function main() {
       const schoolName = String(req.query.school_name || "").trim();
       const regionName = String(req.query.region_name || "").trim();
       const schoolCode = String(req.query.school_code || "").trim();
-      const schoolType = String(req.query.school_type || "").trim();
       const targetDate = String(req.query.target_date || "").trim();
       const grade = Number(req.query.grade);
       const classNum = Number(req.query.class_num);
@@ -277,10 +249,9 @@ async function main() {
       }
 
       let selectedSchool = null;
-      if (schoolCode && schoolType) {
+      if (schoolCode) {
         selectedSchool = {
           school_code: schoolCode,
-          school_type: schoolType,
           school_name: schoolName,
           region_name: regionName,
         };
@@ -290,12 +261,12 @@ async function main() {
         selectedSchool = selectSchool(schools, { schoolName, regionName, schoolCode });
       }
 
-      const weeklyData = await adapter.getTimetable(
-        Number(selectedSchool.school_code),
-        Number(selectedSchool.school_type),
+      const weeklyData = await adapter.getTimetable({
+        schoolCode: Number(selectedSchool.school_code),
         grade,
-        classNum
-      );
+        classNum,
+        maxGrade: Math.max(grade, 3),
+      });
 
       const weeklyGrid = normalizeWeeklyGrid(weeklyData);
       const dailySubjects = weeklyGrid[weekInfo.weekdayIndex]?.periods || [];
