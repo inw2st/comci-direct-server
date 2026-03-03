@@ -1,0 +1,339 @@
+const express = require("express");
+
+const KOREAN_WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"];
+
+async function createComciganAdapter() {
+  const mod = require("comcigan-parser");
+  const candidates = [];
+
+  if (typeof mod === "function") {
+    try {
+      candidates.push(new mod());
+    } catch {
+      candidates.push(mod);
+    }
+  }
+
+  if (mod && typeof mod === "object") {
+    candidates.push(mod);
+    if (mod.default) {
+      try {
+        candidates.push(typeof mod.default === "function" ? new mod.default() : mod.default);
+      } catch {
+        candidates.push(mod.default);
+      }
+    }
+    if (mod.Comcigan) {
+      try {
+        candidates.push(new mod.Comcigan());
+      } catch {
+        candidates.push(mod.Comcigan);
+      }
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const searchSchool = candidate.searchSchool || mod.searchSchool;
+    const getTimetable = candidate.getTimetable || mod.getTimetable;
+    const init = candidate.init || mod.init;
+
+    if (typeof searchSchool === "function" && typeof getTimetable === "function") {
+      if (typeof init === "function") {
+        await init.call(candidate);
+      }
+      return {
+        searchSchool: searchSchool.bind(candidate),
+        getTimetable: getTimetable.bind(candidate),
+      };
+    }
+  }
+
+  throw new Error("Unsupported comcigan-parser export shape");
+}
+
+function weekInfoForDate(dateText) {
+  const target = new Date(`${dateText}T00:00:00+09:00`);
+  if (Number.isNaN(target.getTime())) {
+    throw new Error("target_date must use YYYY-MM-DD format");
+  }
+
+  const now = new Date();
+  const seoulNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+
+  const currentMonday = startOfWeek(seoulNow);
+  const targetMonday = startOfWeek(target);
+  const diffDays = Math.round((targetMonday - currentMonday) / 86400000);
+
+  if (diffDays !== 0 && diffDays !== 7) {
+    return {
+      ok: false,
+      today: formatIsoDate(seoulNow),
+      current_week: {
+        from: formatIsoDate(currentMonday),
+        to: formatIsoDate(addDays(currentMonday, 6)),
+      },
+      next_week: {
+        from: formatIsoDate(addDays(currentMonday, 7)),
+        to: formatIsoDate(addDays(currentMonday, 13)),
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    weekNum: diffDays / 7,
+    weekdayIndex: weekdayIndexMondayFirst(target),
+    weekdayName: KOREAN_WEEKDAYS[weekdayIndexMondayFirst(target)],
+  };
+}
+
+function startOfWeek(date) {
+  const copy = new Date(date);
+  const mondayFirst = weekdayIndexMondayFirst(copy);
+  copy.setDate(copy.getDate() - mondayFirst);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+
+function addDays(date, days) {
+  const copy = new Date(date);
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
+
+function weekdayIndexMondayFirst(date) {
+  return (date.getDay() + 6) % 7;
+}
+
+function formatIsoDate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizeSchool(candidate) {
+  if (Array.isArray(candidate)) {
+    return {
+      school_code: String(candidate[0] ?? ""),
+      region_name: String(candidate[1] ?? ""),
+      school_name: String(candidate[2] ?? ""),
+      school_type: String(candidate[3] ?? ""),
+      raw: candidate,
+    };
+  }
+
+  if (candidate && typeof candidate === "object") {
+    return {
+      school_code: String(candidate.schoolCode ?? candidate.school_code ?? candidate.code ?? ""),
+      region_name: String(candidate.region ?? candidate.region_name ?? candidate.local_name ?? ""),
+      school_name: String(candidate.name ?? candidate.school_name ?? candidate.schoolName ?? ""),
+      school_type: String(candidate.schoolType ?? candidate.school_type ?? candidate.type ?? ""),
+      raw: candidate,
+    };
+  }
+
+  return {
+    school_code: "",
+    region_name: "",
+    school_name: String(candidate ?? ""),
+    school_type: "",
+    raw: candidate,
+  };
+}
+
+function normalizePeriod(period, fallbackPeriod) {
+  if (!period) {
+    return {
+      period: fallbackPeriod,
+      subject: "",
+      teacher: "",
+      display_text: "",
+      is_substitution: false,
+      is_placeholder: true,
+      raw: period,
+    };
+  }
+
+  const subject = String(period.subject ?? "").trim();
+  const teacher = String(period.teacher ?? "").trim();
+  const display = [subject, teacher].filter(Boolean).join(" / ");
+
+  return {
+    period: fallbackPeriod,
+    subject,
+    teacher,
+    display_text: display,
+    is_substitution: String(period.subject ?? "").includes("(대체)") || String(period.teacher ?? "").includes("(대체)"),
+    is_placeholder: !subject,
+    raw: period,
+  };
+}
+
+function normalizeWeeklyGrid(timetableByDay) {
+  if (!Array.isArray(timetableByDay)) {
+    throw new Error(`Unexpected timetable shape: ${typeof timetableByDay}`);
+  }
+
+  return timetableByDay.map((day, weekdayIndex) => ({
+    weekday_index: weekdayIndex,
+    weekday_name_ko: KOREAN_WEEKDAYS[weekdayIndex] || `day-${weekdayIndex}`,
+    periods: Array.isArray(day)
+      ? day.map((period, idx) => normalizePeriod(period, idx + 1))
+      : [],
+  }));
+}
+
+function selectSchool(schools, { schoolName, regionName, schoolCode }) {
+  let matches = schools;
+
+  if (schoolCode) {
+    matches = matches.filter((school) => school.school_code === String(schoolCode));
+  }
+
+  if (schoolName) {
+    matches = matches.filter((school) => school.school_name === schoolName);
+  }
+
+  if (regionName) {
+    matches = matches.filter((school) => school.region_name === regionName);
+  }
+
+  if (matches.length === 1) return matches[0];
+  if (matches.length === 0) {
+    const error = new Error("No exact school match found");
+    error.statusCode = 404;
+    error.payload = { schools };
+    throw error;
+  }
+
+  const error = new Error("Multiple schools matched");
+  error.statusCode = 409;
+  error.payload = { schools: matches };
+  throw error;
+}
+
+async function main() {
+  const adapter = await createComciganAdapter();
+  const app = express();
+
+  app.get("/health", (_req, res) => {
+    res.json({ status: "ok" });
+  });
+
+  app.get("/meta", (_req, res) => {
+    const today = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Seoul" }));
+    const currentMonday = startOfWeek(today);
+    res.json({
+      timezone: "Asia/Seoul",
+      today: formatIsoDate(today),
+      current_week: {
+        week_num: 0,
+        monday: formatIsoDate(currentMonday),
+        sunday: formatIsoDate(addDays(currentMonday, 6)),
+      },
+      next_week: {
+        week_num: 1,
+        monday: formatIsoDate(addDays(currentMonday, 7)),
+        sunday: formatIsoDate(addDays(currentMonday, 13)),
+      },
+      source: "comcigan-parser direct HTML table parsing",
+    });
+  });
+
+  app.get("/schools/search", async (req, res, next) => {
+    try {
+      const query = String(req.query.q || "").trim();
+      if (!query) {
+        return res.status(400).json({ message: "q is required" });
+      }
+
+      const result = await adapter.searchSchool(query);
+      const schools = Array.isArray(result) ? result.map(normalizeSchool) : [];
+      res.json({ query, count: schools.length, schools });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/timetable/verify", async (req, res, next) => {
+    try {
+      const schoolName = String(req.query.school_name || "").trim();
+      const regionName = String(req.query.region_name || "").trim();
+      const schoolCode = String(req.query.school_code || "").trim();
+      const schoolType = String(req.query.school_type || "").trim();
+      const targetDate = String(req.query.target_date || "").trim();
+      const grade = Number(req.query.grade);
+      const classNum = Number(req.query.class_num);
+
+      if (!targetDate || !grade || !classNum) {
+        return res.status(400).json({ message: "target_date, grade, class_num are required" });
+      }
+
+      const weekInfo = weekInfoForDate(targetDate);
+      if (!weekInfo.ok) {
+        return res.status(422).json({
+          message: "Only current week and next week are supported",
+          ...weekInfo,
+        });
+      }
+
+      let selectedSchool = null;
+      if (schoolCode && schoolType) {
+        selectedSchool = {
+          school_code: schoolCode,
+          school_type: schoolType,
+          school_name: schoolName,
+          region_name: regionName,
+        };
+      } else {
+        const result = await adapter.searchSchool(schoolName);
+        const schools = Array.isArray(result) ? result.map(normalizeSchool) : [];
+        selectedSchool = selectSchool(schools, { schoolName, regionName, schoolCode });
+      }
+
+      const weeklyData = await adapter.getTimetable(
+        Number(selectedSchool.school_code),
+        Number(selectedSchool.school_type),
+        grade,
+        classNum
+      );
+
+      const weeklyGrid = normalizeWeeklyGrid(weeklyData);
+      const dailySubjects = weeklyGrid[weekInfo.weekdayIndex]?.periods || [];
+
+      res.json({
+        school: selectedSchool,
+        request: {
+          target_date: targetDate,
+          grade,
+          class_num: classNum,
+          week_num: weekInfo.weekNum,
+          weekday: {
+            index: weekInfo.weekdayIndex,
+            name_ko: weekInfo.weekdayName,
+          },
+        },
+        daily_subjects: dailySubjects,
+        weekly_grid: weeklyGrid,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.use((error, _req, res, _next) => {
+    res.status(error.statusCode || 500).json({
+      message: error.message || "Unexpected error",
+      ...(error.payload || {}),
+    });
+  });
+
+  const port = Number(process.env.PORT || 3000);
+  app.listen(port, () => {
+    console.log(`comci-direct-server listening on :${port}`);
+  });
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
